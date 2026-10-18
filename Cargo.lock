@@ -523,6 +523,7 @@ name = "resvg"
 version = "0.48.1"
 dependencies = [
  "bytemuck",
+ "flate2",
  "gif",
  "image-webp",
  "log",

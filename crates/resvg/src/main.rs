@@ -5,7 +5,10 @@
 
 use std::path;
 use std::sync::Arc;
+use std::io::Read;
+use std::io::Write;
 
+use flate2::read::GzDecoder;
 use usvg::fontdb;
 
 fn main() {
@@ -29,6 +32,76 @@ where
     result
 }
 
+fn open_input_stream(in_svg: &InputFrom) -> Result<Box<dyn Read>, &str> {
+    if let InputFrom::File(file) = in_svg {
+        Ok(Box::new(std::fs::File::open(file).map_err(|_| "failed to open the provided file")?))
+    } else {
+        let stdin = std::io::stdin();
+        Ok(Box::new(stdin.lock()))
+    }
+}
+
+fn open_output_stream(out_png_opt: Option<&OutputTo>) -> Result<Box<dyn Write>, &str> {
+    if let Some(out_png) = out_png_opt {
+        if let OutputTo::File(file) = out_png {
+            Ok(Box::new(std::fs::File::create(file).map_err(|_| "failed to open the output file")?))
+        } else {
+            let stdout = std::io::stdout();
+            Ok(Box::new(stdout.lock()))
+        }
+    } else {
+        Ok(Box::new(std::io::sink()))
+    }
+}
+
+fn process_single(output: &mut Box<dyn Write>, svg_data: &[u8], args: &mut Args, fonts_loaded: &mut bool) -> Result<(), String> {
+    let svg_string = std::str::from_utf8(&svg_data)
+        .map_err(|_| "provided data has not an UTF-8 encoding".to_string())?;
+
+    let xml_tree = timed(args.perf, "XML Parsing", || {
+        let xml_opt = usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        };
+        usvg::roxmltree::Document::parse_with_options(svg_string, xml_opt)
+            .map_err(|e| e.to_string())
+    })?;
+
+    if !*fonts_loaded {
+        // fontdb initialization is pretty expensive, so perform it only when needed.
+        let has_text_nodes = xml_tree
+            .descendants()
+            .any(|n| n.has_tag_name(("http://www.w3.org/2000/svg", "text")));
+
+        if has_text_nodes {
+            timed(args.perf, "FontDB", || {
+                load_fonts(&args.raw_args, args.usvg.fontdb_mut());
+            });
+            *fonts_loaded = true;
+        }
+    }
+
+    let tree = timed(args.perf, "SVG Parsing", || {
+        usvg::Tree::from_xmltree(&xml_tree, &args.usvg).map_err(|e| e.to_string())
+    })?;
+
+    if args.query_all {
+        return query_all(&tree);
+    }
+    if args.query_bbox {
+        return query_bbox(&tree);
+    }
+
+    // Render.
+    let img = render_svg(&args, &tree)?;
+    let buf = img.encode_png().map_err(|e| e.to_string())?;
+    timed(args.perf, "Saving", || {
+        output.write_all(&buf).map_err(|e| e.to_string())
+    })?;
+
+    Ok(())
+}
+
 fn process() -> Result<(), String> {
     let mut args = match parse_args() {
         Ok(args) => args,
@@ -47,76 +120,35 @@ fn process() -> Result<(), String> {
         }
     }
 
-    let mut svg_data = timed(args.perf, "Reading", || -> Result<Vec<u8>, &str> {
-        if let InputFrom::File(ref file) = args.in_svg {
-            std::fs::read(file).map_err(|_| "failed to open the provided file")
-        } else {
-            use std::io::Read;
-            let mut buf = Vec::new();
-            let stdin = std::io::stdin();
-            let mut handle = stdin.lock();
-            handle
-                .read_to_end(&mut buf)
-                .map_err(|_| "failed to read stdin")?;
-            Ok(buf)
+    let mut input = open_input_stream(&args.in_svg)?;
+    let out_png = if args.query_all || args.query_bbox { Option::None } else { args.out_png.as_ref() };
+    let mut output= open_output_stream(out_png)?;
+
+    let mut frame_counter = 0;
+
+    loop {
+        let mut fonts_loaded = false;
+        let mut decoder = GzDecoder::new(&mut input);
+        let name = format!("Reading {}", frame_counter);
+        match timed(args.perf, &name, || -> Result<Option<Vec<u8>>, String> {
+            let mut svg_data = Vec::new();
+            let usize = decoder.read_to_end(&mut svg_data).map_err(|e| format!("Frame decoding error {}: {}", frame_counter, e))?;
+            if usize == 0 {
+                Ok(Option::None)
+            } else {
+                Ok(Option::Some(svg_data))
+            }
+        }) {
+            Ok(Option::None) => {
+                break;
+            },
+            Ok(Option::Some(svg_data)) => {
+                process_single(&mut output, &svg_data, &mut args, &mut fonts_loaded)?;
+                frame_counter += 1;
+            }
+            Err(e) => return Err(e),
         }
-    })?;
-
-    if svg_data.starts_with(&[0x1f, 0x8b]) {
-        svg_data = timed(args.perf, "SVGZ Decoding", || {
-            usvg::decompress_svgz(&svg_data).map_err(|e| e.to_string())
-        })?;
-    };
-
-    let svg_string = std::str::from_utf8(&svg_data)
-        .map_err(|_| "provided data has not an UTF-8 encoding".to_string())?;
-
-    let xml_tree = timed(args.perf, "XML Parsing", || {
-        let xml_opt = usvg::roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..Default::default()
-        };
-        usvg::roxmltree::Document::parse_with_options(svg_string, xml_opt)
-            .map_err(|e| e.to_string())
-    })?;
-
-    // fontdb initialization is pretty expensive, so perform it only when needed.
-    let has_text_nodes = xml_tree
-        .descendants()
-        .any(|n| n.has_tag_name(("http://www.w3.org/2000/svg", "text")));
-
-    if has_text_nodes {
-        timed(args.perf, "FontDB", || {
-            load_fonts(&args.raw_args, args.usvg.fontdb_mut());
-        });
     }
-
-    let tree = timed(args.perf, "SVG Parsing", || {
-        usvg::Tree::from_xmltree(&xml_tree, &args.usvg).map_err(|e| e.to_string())
-    })?;
-
-    if args.query_all {
-        return query_all(&tree);
-    }
-    if args.query_bbox {
-        return query_bbox(&tree);
-    }
-
-    // Render.
-    let img = render_svg(&args, &tree)?;
-
-    match args.out_png.unwrap() {
-        OutputTo::Stdout => {
-            use std::io::Write;
-            let buf = img.encode_png().map_err(|e| e.to_string())?;
-            std::io::stdout().write_all(&buf).unwrap();
-        }
-        OutputTo::File(ref file) => {
-            timed(args.perf, "Saving", || {
-                img.save_png(file).map_err(|e| e.to_string())
-            })?;
-        }
-    };
 
     Ok(())
 }
