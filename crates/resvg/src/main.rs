@@ -121,7 +121,7 @@ fn process() -> Result<(), String> {
     }
 
     let mut input = open_input_stream(&args.in_svg)?;
-    let out_png = if args.query_all || args.query_bbox { Option::None } else { args.out_png.as_ref() };
+    let out_png = if args.query_all || args.query_bbox { Option::None } else { Option::Some(args.out_png.as_ref().unwrap()) };
     let mut output= open_output_stream(out_png)?;
 
     let mut frame_counter = 0;
@@ -154,7 +154,8 @@ fn process() -> Result<(), String> {
 }
 
 const HELP: &str = "\
-resvg is an SVG rendering application.
+resvg is an SVG rendering application. It can convert SVGZ only.
+It accepts multiple SVGZ (single file or stdin) and makes multiple PNG (single file or stdout).
 
 USAGE:
   resvg [OPTIONS] <in-svg> <out-png>  # from file to file
