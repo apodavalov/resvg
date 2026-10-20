@@ -128,36 +128,26 @@ fn process() -> Result<(), String> {
 
     loop {
         let mut fonts_loaded = false;
-        let mut header_byte = [0u8; 1];
-        match input.read(&mut header_byte) {
-            Ok(0) => {
-                break;
+        let mut decoder = GzDecoder::new(&mut input);
+        let name = format!("Reading {}", frame_counter);
+        match timed(args.perf, &name, || -> Result<Option<Vec<u8>>, String> {
+            let mut svg_data = Vec::new();
+            let usize = decoder.read_to_end(&mut svg_data).map_err(|e| format!("Frame decoding error {}: {}", frame_counter, e))?;
+            if usize == 0 {
+                Ok(Option::None)
+            } else {
+                Ok(Option::Some(svg_data))
             }
-            Ok(_) => {
-                let mut full_source = header_byte.as_slice().chain(&mut input);
-                let mut decoder = GzDecoder::new(&mut full_source);
-                let name = format!("Reading {}", frame_counter);
-                match timed(args.perf, &name, || -> Result<Option<Vec<u8>>, String> {
-                    let mut svg_data = Vec::new();
-                    let usize = decoder.read_to_end(&mut svg_data).map_err(|e| format!("Frame decoding error {}: {}", frame_counter, e))?;
-                    if usize == 0 {
-                        Ok(Option::None)
-                    } else {
-                        Ok(Option::Some(svg_data))
-                    }
-                }) {
-                    Ok(Option::None) => {
-                        break;
-                    },
-                    Ok(Option::Some(svg_data)) => {
-                        process_single(&mut output, &svg_data, &mut args, &mut fonts_loaded)?;
-                        frame_counter += 1;
-                    }
-                    Err(e) => return Err(e),
-                }
+        }) {
+            Ok(Option::None) => {
+                break;
             },
-            Err(e) => return Err(format!("Unable to look forward {}",e)),
-        };
+            Ok(Option::Some(svg_data)) => {
+                process_single(&mut output, &svg_data, &mut args, &mut fonts_loaded)?;
+                frame_counter += 1;
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     Ok(())
