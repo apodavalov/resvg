@@ -5,8 +5,7 @@
 
 use std::path;
 use std::sync::Arc;
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, BufRead, BufReader, Write};
 
 use flate2::read::GzDecoder;
 use usvg::fontdb;
@@ -32,12 +31,12 @@ where
     result
 }
 
-fn open_input_stream(in_svg: &InputFrom) -> Result<Box<dyn Read>, &str> {
+fn open_input_stream(in_svg: &InputFrom) -> Result<Box<dyn BufRead>, &str> {
     if let InputFrom::File(file) = in_svg {
-        Ok(Box::new(std::fs::File::open(file).map_err(|_| "failed to open the provided file")?))
+        Ok(Box::new(BufReader::new(std::fs::File::open(file).map_err(|_| "failed to open the provided file")?)))
     } else {
         let stdin = std::io::stdin();
-        Ok(Box::new(stdin.lock()))
+        Ok(Box::new(BufReader::new(stdin.lock())))
     }
 }
 
@@ -128,6 +127,10 @@ fn process() -> Result<(), String> {
 
     loop {
         let mut fonts_loaded = false;
+        let available_bytes = input.fill_buf().map_err(|e| format!("Unable to look forward {}", e))?;
+        if available_bytes.is_empty() {
+            break;
+        }
         let mut decoder = GzDecoder::new(&mut input);
         let name = format!("Reading {}", frame_counter);
         match timed(args.perf, &name, || -> Result<Option<Vec<u8>>, String> {
