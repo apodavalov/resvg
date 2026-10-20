@@ -124,9 +124,9 @@ fn process() -> Result<(), String> {
     let mut output= open_output_stream(out_png)?;
 
     let mut frame_counter = 0;
+    let mut fonts_loaded = false;
 
     loop {
-        let mut fonts_loaded = false;
         let available_bytes = input.fill_buf().map_err(|e| format!("Unable to look forward {}", e))?;
         if available_bytes.is_empty() {
             break;
