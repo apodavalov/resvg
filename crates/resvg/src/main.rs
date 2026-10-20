@@ -131,7 +131,8 @@ fn process() -> Result<(), String> {
         if available_bytes.is_empty() {
             break;
         }
-        let mut decoder = GzDecoder::new(&mut input);
+        let reader_ref: &mut dyn BufRead = &mut *input;
+        let mut decoder = GzDecoder::new(reader_ref);
         let name = format!("Reading {}", frame_counter);
         match timed(args.perf, &name, || -> Result<Option<Vec<u8>>, String> {
             let mut svg_data = Vec::new();
