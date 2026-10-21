@@ -93,10 +93,17 @@ fn process_single(output: &mut Box<dyn Write>, svg_data: &[u8], args: &mut Args,
 
     // Render.
     let img = render_svg(&args, &tree)?;
-    let buf = img.encode_png().map_err(|e| e.to_string())?;
-    timed(args.perf, "Saving", || {
-        output.write_all(&buf).map_err(|e| e.to_string())
-    })?;
+
+    if args.raw_output {
+        timed(args.perf, "Saving raw", || {
+            output.write_all(img.data()).map_err(|e| e.to_string())
+        })?;
+    } else {
+        let buf = img.encode_png().map_err(|e| e.to_string())?;
+        timed(args.perf, "Saving", || {
+            output.write_all(&buf).map_err(|e| e.to_string())
+        })?;
+    }
 
     Ok(())
 }
@@ -251,6 +258,8 @@ OPTIONS:
   --perf                        Prints performance stats
   --quiet                       Disables warnings
 
+  --raw-output                  Output raw pixels in RGBA instead of png.
+
 ARGS:
   <in-svg>                      Input file
   <out-png>                     Output file
@@ -292,6 +301,8 @@ struct CliArgs {
 
     perf: bool,
     quiet: bool,
+
+    raw_output: bool,
 
     input: Option<String>,
     output: Option<String>,
@@ -357,6 +368,8 @@ fn collect_args() -> Result<CliArgs, pico_args::Error> {
 
         perf: input.contains("--perf"),
         quiet: input.contains("--quiet"),
+
+        raw_output: input.contains("--raw-output"),
 
         input: input.opt_free_from_str()?,
         output: input.opt_free_from_str()?,
@@ -510,6 +523,7 @@ struct Args {
     usvg: usvg::Options<'static>,
     fit_to: FitTo,
     background: Option<svgtypes::Color>,
+    raw_output: bool,
     raw_args: CliArgs, // TODO: find a better way
 }
 
@@ -637,6 +651,7 @@ fn parse_args() -> Result<Args, String> {
         export_area_drawing: args.export_area_drawing,
         perf: args.perf,
         quiet: args.quiet,
+        raw_output: args.raw_output,
         usvg,
         fit_to,
         background: args.background,
