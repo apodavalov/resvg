@@ -805,16 +805,24 @@ fn render_svg(args: &Args, tree: &usvg::Tree) -> Result<tiny_skia::Pixmap, Strin
             .fit_to_size(tree.size())
             .ok_or("target size is zero")?;
 
+        let canvas_width = args.raw_args.width.unwrap_or(size.width().ceil() as u32);
+        let canvas_height = args.raw_args.height.unwrap_or(size.height().ceil() as u32);
+
         // Pixmap's width is limited by i32::MAX/4, we handle the creation error.
         let mut pixmap =
-            tiny_skia::Pixmap::new(size.width().ceil() as u32, size.height().ceil() as u32)
+            tiny_skia::Pixmap::new(canvas_width, canvas_height)
                 .ok_or("cannot create pixmap")?;
 
         if let Some(background) = args.background {
             pixmap.fill(svg_to_skia_color(background));
         }
 
-        let ts = args.fit_to.fit_to_transform(tree.size());
+        let mut ts = args.fit_to.fit_to_transform(tree.size());
+
+        let offset_x = (canvas_width as f32 - size.width()) / 2.0;
+        let offset_y = (canvas_height as f32 - size.height()) / 2.0;
+
+        ts = ts.post_translate(offset_x, offset_y);
 
         resvg::render(tree, ts, &mut pixmap.as_mut());
 
